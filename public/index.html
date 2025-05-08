@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StompJS SockJS Client</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      .connection-status {
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 4px;
+      }
+      .connected {
+        background-color: #d4edda;
+        color: #155724;
+      }
+      .disconnected {
+        background-color: #f8d7da;
+        color: #721c24;
+      }
+      .connecting {
+        background-color: #fff3cd;
+        color: #856404;
+      }
+      .message-container {
+        flex-grow: 1;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 20px;
+        overflow-y: auto;
+        height: 300px;
+      }
+      .message {
+        margin-bottom: 10px;
+        padding: 8px;
+        border-radius: 4px;
+      }
+      .received {
+        background-color: #e9ecef;
+      }
+      .sent {
+        background-color: #d1ecf1;
+        text-align: right;
+      }
+      .error {
+        background-color: #f8d7da;
+      }
+      .system {
+        background-color: #e2e3e5;
+        font-style: italic;
+      }
+      .timestamp {
+        font-size: 0.8em;
+        color: #6c757d;
+      }
+      .message-form {
+        display: flex;
+      }
+      .message-input {
+        flex-grow: 1;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .send-button {
+        margin-left: 10px;
+        padding: 8px 16px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .send-button:disabled {
+        background-color: #6c757d;
+        cursor: not-allowed;
+      }
+      .send-button:hover:not(:disabled) {
+        background-color: #0069d9;
+      }
+      .destination-select {
+        margin-bottom: 10px;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        width: 100%;
+      }
+      .debug-panel {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #f8f9fa;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+      .controls {
+        margin: 10px 0;
+        display: flex;
+        gap: 10px;
+      }
+      .btn {
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>StompJS SockJS Client</h1>
+
+      <div id="connectionStatus" class="connection-status disconnected">
+        Disconnected
+      </div>
+
+      <div class="controls">
+        <button id="connectButton" class="btn">Connect</button>
+        <button id="disconnectButton" class="btn" disabled>Disconnect</button>
+        <button id="clearButton" class="btn">Clear Messages</button>
+      </div>
+
+      <h2>Messages</h2>
+      <select id="destination" class="destination-select">
+        <option value="/topic/messages">/topic/messages (Public)</option>
+        <option value="/user/queue/messages">
+          /user/queue/messages (Private)
+        </option>
+      </select>
+
+      <div id="messageContainer" class="message-container"></div>
+
+      <form id="messageForm" class="message-form">
+        <input
+          type="text"
+          id="messageInput"
+          class="message-input"
+          placeholder="Type your message..."
+          disabled
+        />
+        <button type="submit" id="sendButton" class="send-button" disabled>
+          Send
+        </button>
+      </form>
+
+      <div class="debug-panel">
+        <h3>Debug Log</h3>
+        <div id="debugLog"></div>
+      </div>
+    </div>
+
+    <!-- Import libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js"></script>
+
+    <script>
+      // DOM elements
+      const connectButton = document.getElementById("connectButton");
+      const disconnectButton = document.getElementById("disconnectButton");
+      const clearButton = document.getElementById("clearButton");
+      const messageForm = document.getElementById("messageForm");
+      const messageInput = document.getElementById("messageInput");
+      const sendButton = document.getElementById("sendButton");
+      const messageContainer = document.getElementById("messageContainer");
+      const connectionStatus = document.getElementById("connectionStatus");
+      const destinationSelect = document.getElementById("destination");
+      const debugLog = document.getElementById("debugLog");
+
+      // StompJS client
+      let stompClient = null;
+
+      // Debug logging
+      function log(message) {
+        const logEntry = document.createElement("div");
+        logEntry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+        debugLog.appendChild(logEntry);
+        debugLog.scrollTop = debugLog.scrollHeight;
+        console.log(message);
+      }
+
+      // Update UI based on connection state
+      function setConnected(connected) {
+        connectButton.disabled = connected;
+        disconnectButton.disabled = !connected;
+        messageInput.disabled = !connected;
+        sendButton.disabled = !connected;
+
+        connectionStatus.className = connected
+          ? "connection-status connected"
+          : "connection-status disconnected";
+        connectionStatus.textContent = connected
+          ? "Connected to STOMP server"
+          : "Disconnected";
+
+        if (!connected) {
+          addMessage("System", "Disconnected from server", "system");
+        }
+      }
+
+      function setConnecting() {
+        connectButton.disabled = true;
+        disconnectButton.disabled = true;
+        messageInput.disabled = true;
+        sendButton.disabled = true;
+
+        connectionStatus.className = "connection-status connecting";
+        connectionStatus.textContent = "Connecting...";
+      }
+
+      // Connect to server
+      function connect() {
+        setConnecting();
+
+        log("Creating SockJS connection...");
+
+        // Initialize SockJS connection
+        const socket = new SockJS("http://localhost:8080/ws-endpoint");
+
+        // Initialize StompJS client
+        stompClient = StompJs.Stomp.over(function () {
+          log("WebSocketFactory called");
+          return socket;
+        });
+
+        // Configure STOMP client
+        stompClient.reconnectDelay = 5000;
+        stompClient.heartbeatIncoming = 4000;
+        stompClient.heartbeatOutgoing = 4000;
+
+        // Enable detailed debug logging
+        stompClient.debug = function (str) {
+          log("STOMP: " + str);
+        };
+
+        // Connect event handlers
+        stompClient.onConnect = function (frame) {
+          log("Connected: " + frame);
+          setConnected(true);
+          addMessage("System", "Connected to server", "system");
+
+          // Subscribe to the selected destination
+          subscribe(destinationSelect.value);
+        };
+
+        stompClient.onStompError = function (frame) {
+          log("STOMP error: " + frame.headers["message"]);
+          addMessage(
+            "Error",
+            "STOMP protocol error: " + frame.headers["message"],
+            "error"
+          );
+        };
+
+        stompClient.onWebSocketClose = function () {
+          log("WebSocket connection closed");
+          setConnected(false);
+        };
+
+        stompClient.onWebSocketError = function () {
+          log("WebSocket error occurred");
+          addMessage("Error", "WebSocket connection error", "error");
+          setConnected(false);
+        };
+
+        // Connect with credentials
+        log("Activating STOMP connection...");
+        stompClient.connectHeaders = {
+          login: "guest",
+          passcode: "guest",
+        };
+
+        stompClient.activate();
+      }
+
+      // Disconnect from server
+      function disconnect() {
+        if (stompClient) {
+          log("Disconnecting from server...");
+          stompClient.deactivate();
+        }
+        setConnected(false);
+      }
+
+      // Subscribe to a destination
+      function subscribe(destination) {
+        if (!stompClient || !stompClient.connected) {
+          log("Cannot subscribe: Not connected");
+          return;
+        }
+
+        log("Subscribing to " + destination);
+
+        stompClient.subscribe(destination, function (message) {
+          log("Received message: " + message.body);
+
+          try {
+            const body = JSON.parse(message.body);
+            addMessage("Received", body.content, "received", body.timestamp);
+          } catch (e) {
+            addMessage("Received", message.body, "received");
+          }
+        });
+
+        addMessage("System", "Subscribed to " + destination, "system");
+      }
+
+      // Send a message
+      function sendMessage(text) {
+        if (!stompClient || !stompClient.connected) {
+          log("Cannot send: Not connected");
+          addMessage("Error", "Not connected to server", "error");
+          return;
+        }
+
+        const destination = destinationSelect.value;
+        const message = {
+          content: text,
+          timestamp: new Date().toISOString(),
+        };
+
+        log("Sending message to " + destination + ": " + text);
+
+        stompClient.publish({
+          destination: destination,
+          body: JSON.stringify(message),
+        });
+
+        addMessage("Sent", text, "sent", new Date().toISOString());
+      }
+
+      // Add message to UI
+      function addMessage(prefix, text, type, timestamp) {
+        const messageDiv = document.createElement("div");
+        messageDiv.className = `message ${type}`;
+
+        const messageContent = document.createElement("div");
+        messageContent.textContent = `${prefix}: ${text}`;
+        messageDiv.appendChild(messageContent);
+
+        if (timestamp) {
+          const timestampDiv = document.createElement("div");
+          timestampDiv.className = "timestamp";
+          const date = new Date(timestamp);
+          timestampDiv.textContent = `${date.toLocaleTimeString()}`;
+          messageDiv.appendChild(timestampDiv);
+        }
+
+        messageContainer.appendChild(messageDiv);
+        messageContainer.scrollTop = messageContainer.scrollHeight;
+      }
+
+      // Clear messages
+      function clearMessages() {
+        messageContainer.innerHTML = "";
+        addMessage("System", "Messages cleared", "system");
+      }
+
+      // Event listeners
+      connectButton.addEventListener("click", connect);
+      disconnectButton.addEventListener("click", disconnect);
+      clearButton.addEventListener("click", clearMessages);
+
+      messageForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        const message = messageInput.value;
+        if (message && message.trim()) {
+          sendMessage(message);
+          messageInput.value = "";
+        }
+      });
+
+      destinationSelect.addEventListener("change", function () {
+        if (stompClient && stompClient.connected) {
+          subscribe(destinationSelect.value);
+        }
+      });
+
+      // Initialize
+      log("Client initialized and ready");
+    </script>
+  </body>
+</html>
